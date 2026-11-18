@@ -323,6 +323,159 @@ void testMotion()
     motor.tick(target, locks, true, false, 1, 0.01f);
     check(near(motor.position[1], 0.91f), "Wander must allow a grace period after drag");
 }
+void testMusicalMutation()
+{
+    const smalltimer::Values centre { 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f };
+    for (int index = 0; index < 6; ++index)
+        check(std::abs(smalltimer::mutationGestures[0][index] + smalltimer::mutationGestures[1][index]
+                       + smalltimer::mutationGestures[2][index]) < 0.000001f,
+              "The recipe set must have no built-in upward or downward bias");
+    for (const bool forever : { false, true })
+        for (const auto depth : { 0.35f, 1.0f })
+        {
+            auto positions = centre;
+            smalltimer::Values total {};
+            std::array<int, 6> upperVisits {}, lowerVisits {};
+            uint32_t stream = 0x19a7b3cdu;
+            bool bounded = true;
+            for (int press = 0; press < 21000; ++press)
+            {
+                stream ^= stream << 13;
+                stream ^= stream >> 17;
+                stream ^= stream << 5;
+                positions = smalltimer::planMutation(positions, depth, forever, stream).values;
+                for (int index = 0; index < 6; ++index)
+                {
+                    bounded = bounded && positions[index] >= 0 && positions[index] <= 1;
+                    if (press >= 1000)
+                    {
+                        total[index] += positions[index];
+                        upperVisits[index] += positions[index] > 0.9f ? 1 : 0;
+                        lowerVisits[index] += positions[index] < 0.1f ? 1 : 0;
+                    }
+                }
+            }
+            check(bounded, "Repeated seeds must remain bounded in both modes at low and high depth");
+            for (int index = 0; index < 6; ++index)
+            {
+                const auto average = total[index] / 20000;
+                check(average > 0.35f && average < 0.65f, "Long seed runs must explore the range instead of drifting toward a rail");
+                check(upperVisits[index] < 4000 && lowerVisits[index] < 4000, "Long seed runs must not accumulate near either endpoint");
+            }
+        }
+    for (uint32_t seed = 0; seed < 120; ++seed)
+    {
+        const auto zero = smalltimer::planMutation(centre, 0, false, seed);
+        const auto subtle = smalltimer::planMutation(centre, 0.2f, false, seed);
+        const auto bold = smalltimer::planMutation(centre, 0.8f, false, seed);
+        const auto repeat = smalltimer::planMutation(centre, 0.8f, false, seed);
+        check(zero.values == centre, "Zero mutation depth must preserve every fader");
+        check(bold.values == repeat.values && bold.kind == repeat.kind, "Musical gestures must be deterministic for a supplied seed");
+        for (int index = 0; index < 6; ++index)
+        {
+            check(std::abs(bold.values[index] - centre[index]) > std::abs(subtle.values[index] - centre[index]), "Higher depth must enlarge the same musical gesture");
+            check(bold.values[index] >= 0 && bold.values[index] <= 1, "Musical gesture values must stay in range");
+            check((bold.values[index] - centre[index]) * smalltimer::mutationGestures[bold.kind][index] > 0, "Fader changes must follow the chosen gesture's coordinated directions");
+        }
+        check(std::abs(bold.values[5] - centre[5]) < 0.1f, "Mutation must keep dry/wet changes restrained");
+        const auto forever = smalltimer::planMutation(centre, 0.8f, true, seed);
+        if (bold.values[1] > centre[1])
+            check(forever.values[1] < bold.values[1], "Forever must use gentler positive feedback mutations");
+        for (const auto& edge : { smalltimer::Values { 0, 0, 0, 0, 0, 0 }, smalltimer::Values { 1, 1, 1, 1, 1, 1 } })
+            for (const auto result : smalltimer::planMutation(edge, 1, false, seed).values)
+                check(std::isfinite(result) && result > 0 && result < 1, "A seed at either rail must reflect back into the playable range");
+    }
+    SmallTimerProcessor processor;
+    processor.setValue("mutate", 1);
+    auto resetBank = [&](int bank)
+    {
+        processor.setValue("mode", static_cast<float>(bank));
+        for (int index = 0; index < 6; ++index)
+        {
+            processor.setValue("lock" + juce::String(index), 0);
+            processor.setValue(SmallTimerProcessor::faderID(bank, index), 0.5f);
+        }
+    };
+    resetBank(0);
+    check(!processor.canUndoMutation() && !processor.undoMutation(), "Undo must start empty");
+    juce::MemoryBlock originalState, restoredState;
+    processor.getStateInformation(originalState);
+    processor.mutate();
+    check(processor.canUndoMutation() && processor.mutationName().isNotEmpty(), "A new musical seed must expose undo and a gesture name");
+    const auto firstSeed = processor.targets();
+    processor.mutate();
+    check(processor.undoMutation() && processor.targets() == firstSeed, "Undo must restore the immediately preceding seed, not factory settings");
+    check(!processor.canUndoMutation() && !processor.undoMutation(), "Undo must be one step, not toggle between seeds");
+    resetBank(0);
+    processor.mutate();
+    check(processor.undoMutation() && processor.targets() == centre, "Undo must restore all changed faders exactly");
+    processor.getStateInformation(restoredState);
+    check(originalState == restoredState, "Mutation plus undo must restore the original saved parameter state");
+    processor.mutate();
+    const auto loopSeed = processor.targets();
+    resetBank(1);
+    check(!processor.canUndoMutation(), "An untouched mode must not inherit the other mode's undo");
+    processor.mutate();
+    check(processor.undoMutation() && processor.targets() == centre, "Forever must have its own undo snapshot");
+    processor.setValue("mode", 0);
+    check(processor.targets() == loopSeed && processor.canUndoMutation(), "Mode switching must retain the Loop seed and undo");
+    check(processor.undoMutation() && processor.targets() == centre, "Loop undo must remain independent of Forever");
+    processor.mutate();
+    processor.setValue("mutate", 0);
+    processor.mutate();
+    check(processor.canUndoMutation() && processor.undoMutation() && processor.targets() == centre, "Zero-depth seed must not erase a useful undo");
+    processor.setValue("mutate", 1);
+    processor.mutate();
+    const auto lockedTime = processor.targets()[0];
+    processor.setValue("lock0", 1);
+    processor.setValue(SmallTimerProcessor::faderID(0, 1), 0.123f);
+    const auto editedFeed = processor.targets()[1];
+    check(processor.undoMutation(), "Undo must still restore eligible faders");
+    check(processor.targets()[0] == lockedTime, "Undo must preserve a newly locked fader");
+    check(processor.targets()[1] == editedFeed, "Undo must preserve a subsequently edited fader");
+    for (int index = 2; index < 6; ++index)
+        check(processor.targets()[index] == centre[index], "Undo must restore untouched unlocked seed changes");
+    resetBank(0);
+    processor.setValue("lock0", 1);
+    processor.mutate();
+    processor.setValue("lock0", 0);
+    processor.setValue(SmallTimerProcessor::faderID(0, 0), 0.321f);
+    processor.undoMutation();
+    check(near(processor.targets()[0], 0.321f), "Undo must not touch a fader excluded from the original mutation");
+    resetBank(0);
+    processor.mutate();
+    for (int index = 0; index < 6; ++index) processor.setValue("lock" + juce::String(index), 1);
+    processor.mutate();
+    check(!processor.canUndoMutation() && !processor.undoMutation(), "Undo must not override an all-locked bank");
+    processor.setValue("lock0", 0);
+    check(processor.canUndoMutation(), "An all-locked no-op must retain the prior undo until a fader becomes eligible");
+    processor.recall();
+    check(!processor.canUndoMutation() && processor.mutationName().isEmpty(), "Recall must invalidate stale seed undo and gesture metadata");
+    resetBank(0);
+    processor.mutate();
+    juce::MemoryBlock savedSeed;
+    processor.getStateInformation(savedSeed);
+    processor.setStateInformation(savedSeed.getData(), static_cast<int>(savedSeed.getSize()));
+    check(!processor.canUndoMutation() && processor.mutationName().isEmpty(), "Undo history and gesture metadata must not survive state loading");
+    processor.mutate();
+    {
+        std::unique_ptr<juce::AudioProcessorEditor> closedEditor(processor.createEditor());
+    }
+    check(processor.canUndoMutation(), "Closing the editor must not discard the instance's seed undo");
+    std::unique_ptr<juce::AudioProcessorEditor> editor(processor.createEditor());
+    bool foundUndo = false;
+    for (auto* child : editor->getChildren())
+        if (auto* button = dynamic_cast<juce::TextButton*>(child))
+            if (button->getButtonText() == "UNDO SEED")
+            {
+                foundUndo = true;
+                check(button->isEnabled(), "Reopened editor must enable a pending seed undo");
+                button->onClick();
+                check(!processor.canUndoMutation() && !button->isEnabled(), "UNDO SEED must consume and disable the pending undo");
+            }
+    check(foundUndo, "Musical mutation must provide an accessible undo control");
+}
+
 void testProcessor()
 {
     SmallTimerProcessor processor;
@@ -394,6 +547,16 @@ void testProcessor()
     check(!processor.recording && processor.recordedSamples == 300, "Recording must stop cleanly at capacity");
     std::unique_ptr<juce::AudioProcessorEditor> editor(restored.createEditor());
     check(editor->getWidth() == 660 && editor->getHeight() == 750, "Editor must retain tall hardware dimensions");
+    std::array<juce::TextButton*, 4> topSwitches {};
+    const juce::StringArray topNames { "LOOP", "LITTLE FOREVER", "WANDER", "SOFT FAILURE" };
+    for (auto* child : editor->getChildren())
+        if (auto* button = dynamic_cast<juce::TextButton*>(child))
+            for (int index = 0; index < 4; ++index)
+                if (button->getButtonText() == topNames[index]) topSwitches[index] = button;
+    check(std::all_of(topSwitches.begin(), topSwitches.end(), [](auto* button) { return button != nullptr; }), "All top-row controls must remain accessible");
+    check(topSwitches[0]->getRadioGroupId() != 0 && topSwitches[0]->getRadioGroupId() == topSwitches[1]->getRadioGroupId(), "Loop and Little Forever must share an exclusive mode group");
+    check(topSwitches[2]->getRadioGroupId() == 0 && topSwitches[3]->getRadioGroupId() == 0, "Wander and Soft Failure must remain independent switches");
+    check(topSwitches[2]->getX() - topSwitches[1]->getRight() >= 30, "Mode group must be visually separated from independent switches");
     bool foundDisplayGain = false;
     for (auto* child : editor->getChildren())
         if (auto* button = dynamic_cast<juce::TextButton*>(child))
@@ -655,7 +818,7 @@ void testBundles(const juce::File& root)
         auto instance = formats.createPluginInstance(*descriptions[0], 48000, 256, error);
         if (!instance)
             throw std::runtime_error(error.toStdString());
-        check(instance->getPluginDescription().version == "0.2.2", "Host must load the stacked-waveform build");
+        check(instance->getPluginDescription().version == "0.3.1", "Host must load the balanced-mutation build");
         auto buses = instance->getBusesLayout();
         check(!buses.inputBuses.isEmpty() && !buses.outputBuses.isEmpty(), "Built effect must expose input and output buses");
         buses.inputBuses.set(0, juce::AudioChannelSet::stereo());
@@ -724,6 +887,7 @@ int main()
     try
     {
         testMotion();
+        testMusicalMutation();
         testSoundEngine();
         testClosedEditorMotion();
         testStreamAndState();

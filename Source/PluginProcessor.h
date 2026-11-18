@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "Motion.h"
+#include "Mutation.h"
 #include "SoundEngine.h"
 #include "WaveformHistory.h"
 
@@ -35,6 +36,9 @@ public:
     void storeRecall();
     void recall();
     void mutate();
+    bool undoMutation();
+    bool canUndoMutation() const;
+    juce::String mutationName() const;
     void toggleRecord();
     void togglePlay();
     void setFaderDragging(int index, bool dragging);
@@ -47,6 +51,16 @@ public:
     juce::AudioProcessorValueTreeState parameters;
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout layout();
+    struct SeedUndo
+    {
+        smalltimer::Values before {}, after {};
+        std::array<bool, 6> changed {};
+        bool valid = false;
+        int previousKind = -1;
+    };
+    mutable juce::CriticalSection seedLock;
+    std::array<SeedUndo, 2> seedUndo {};
+    std::array<int, 2> seedKinds { -1, -1 };
     juce::AudioBuffer<float> tape;
     smalltimer::WaveformHistory waveform;
     smalltimer::SoundEngine engine;

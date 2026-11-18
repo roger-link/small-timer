@@ -1,9 +1,49 @@
-# Small Timer 0.2.2 — sound engine and waveform validation
+# Small Timer 0.3.1 — balanced mutation, undo and regression validation
 
 Date: November 17, 2026
 
 Environment: Apple silicon, macOS 26.6.2, Apple Clang 21, JUCE 8.0.10.
 Release bundles target arm64 and macOS 12 or newer.
+
+## 0.3.1 endpoint accumulation regression
+
+The subsequent mode-group interface pass brings the total to 7,858 passing
+checks with preview generation and AU/VST3 loading. Added checks verify the
+exclusive Loop/Little Forever radio group, independent Wander/Soft Failure
+switches, accessible top controls and the visual separation between groups.
+
+7,854 checks pass with preview generation and both AU/VST3 wrappers. Recipe
+directions sum to zero for every fader, including after Forever feedback scaling.
+Four 21,000-press deterministic runs cover both modes at depth 0.35 and 1.0;
+after warm-up every fader's mean stays between 0.35 and 0.65, with fewer than
+20% of samples in either outer 10% of its range. Additional tests start exactly
+at each rail and require positive-depth mutations to move inward instead of
+remaining clamped there. Existing deterministic depth, direction, boundary,
+undo, lock, state, display and audio tests remain passing. AU/VST3 report 0.3.1.
+
+These checks catch the built-in upward bias in 0.3.0; they do not guarantee that
+any short random sequence cannot temporarily favour high or low settings.
+
+## 0.3.0 musical mutation and undo
+
+- 7,796 checks pass with the current preview and both AU/VST3 wrappers loaded.
+- Across 120 deterministic seeds: zero-depth identity, coordinated gesture
+  directions, increasing depth, repeatability, restrained MIX travel, gentler
+  positive Forever feedback, and finite/bounded values at the parameter limits.
+- One-step undo restores the immediately preceding seed exactly, independently
+  in each mode. It preserves current locks and subsequently edited values, skips
+  faders excluded from the original seed, and survives editor close/reopen.
+- Zero-depth and all-locked no-ops preserve useful undo; current locks can make
+  it temporarily unavailable. Successful partial undo consumes the one step.
+- Recall invalidates that bank's undo; valid state loading clears both banks'
+  undo and gesture labels. Host state remains parameters only, with no undo
+  history or audio. Mutation followed by full undo restores identical saved state.
+- The accessible UNDO SEED control enables/disables with eligibility. Existing
+  waveform freeze/gain, lighting, motor, audio stability, transport and wrapper
+  tests remain passing. AU/VST3 report version 0.3.0 and open their native editors.
+
+The gesture names describe coordinated parameter changes, not a claim that the
+result is always musically preferable; listening feedback is the next tuning step.
 
 ## Latest interface regression pass
 

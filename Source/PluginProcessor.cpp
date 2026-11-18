@@ -108,7 +108,10 @@ void SmallTimerProcessor::storeRecall()
 }
 void SmallTimerProcessor::recall()
 {
+    const juce::ScopedLock guard(seedLock);
     const auto bank = mode();
+    seedUndo[bank].valid = false;
+    seedKinds[bank] = -1;
     for (int index = 0; index < 6; ++index)
         if (!locked(index))
         {
@@ -120,15 +123,74 @@ void SmallTimerProcessor::recall()
 }
 void SmallTimerProcessor::mutate()
 {
+    const juce::ScopedLock guard(seedLock);
+    const auto bank = mode();
+    const auto before = targets();
+    const auto plan = smalltimer::planMutation(before, value("mutate"), bank == 1,
+                                              static_cast<uint32_t>(juce::Random::getSystemRandom().nextInt()));
+    SeedUndo edit;
+    edit.before = before;
+    edit.after = before;
+    edit.previousKind = seedKinds[bank];
     for (int index = 0; index < 6; ++index)
-        if (!locked(index))
+        if (!locked(index) && std::abs(plan.values[index] - before[index]) > 0.000001f)
         {
-            const auto id = faderID(mode(), index);
+            const auto id = faderID(bank, index);
             auto* parameter = parameters.getParameter(id);
             parameter->beginChangeGesture();
-            setValue(id, juce::jlimit(0.0f, 1.0f, value(id) + (juce::Random::getSystemRandom().nextFloat() - 0.5f) * value("mutate") * 0.6f));
+            setValue(id, plan.values[index]);
             parameter->endChangeGesture();
+            edit.after[index] = value(id);
+            edit.changed[index] = std::abs(edit.after[index] - before[index]) > 0.000001f;
+            edit.valid = edit.valid || edit.changed[index];
         }
+    if (edit.valid)
+    {
+        seedUndo[bank] = edit;
+        seedKinds[bank] = plan.kind;
+    }
+}
+bool SmallTimerProcessor::canUndoMutation() const
+{
+    const juce::ScopedLock guard(seedLock);
+    const auto bank = mode();
+    const auto& edit = seedUndo[bank];
+    for (int index = 0; index < 6; ++index)
+        if (edit.valid && edit.changed[index] && !locked(index)
+            && std::abs(value(faderID(bank, index)) - edit.after[index]) < 0.000001f)
+            return true;
+    return false;
+}
+bool SmallTimerProcessor::undoMutation()
+{
+    const juce::ScopedLock guard(seedLock);
+    const auto bank = mode();
+    auto& edit = seedUndo[bank];
+    if (!edit.valid)
+        return false;
+    bool restored = false;
+    for (int index = 0; index < 6; ++index)
+        if (edit.changed[index] && !locked(index)
+            && std::abs(value(faderID(bank, index)) - edit.after[index]) < 0.000001f)
+        {
+            auto* parameter = parameters.getParameter(faderID(bank, index));
+            parameter->beginChangeGesture();
+            setValue(faderID(bank, index), edit.before[index]);
+            parameter->endChangeGesture();
+            restored = true;
+        }
+    if (restored)
+    {
+        edit.valid = false;
+        seedKinds[bank] = edit.previousKind;
+    }
+    return restored;
+}
+juce::String SmallTimerProcessor::mutationName() const
+{
+    const juce::ScopedLock guard(seedLock);
+    const auto kind = seedKinds[mode()];
+    return kind >= 0 ? smalltimer::mutationNames[kind] : "";
 }
 void SmallTimerProcessor::prepareToPlay(double sampleRate, int)
 {
@@ -239,7 +301,12 @@ void SmallTimerProcessor::setStateInformation(const void* data, int size)
 {
     if (auto xml = getXmlFromBinary(data, size))
         if (xml->hasTagName("SmallTimer"))
+        {
+            const juce::ScopedLock guard(seedLock);
             parameters.replaceState(juce::ValueTree::fromXml(*xml));
+            seedUndo = {};
+            seedKinds = { -1, -1 };
+        }
 }
 juce::AudioProcessorEditor* SmallTimerProcessor::createEditor() { return new SmallTimerEditor(*this); }
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new SmallTimerProcessor(); }

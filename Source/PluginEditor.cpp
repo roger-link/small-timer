@@ -346,7 +346,7 @@ void HardwareLook::drawButtonText(juce::Graphics& graphics, juce::TextButton& bu
         graphics.drawFittedText(text, bounds, topButton(button) ? juce::Justification::centred : juce::Justification::centredLeft, 2);
         return;
     }
-    label(graphics, button.getButtonText(), button.getLocalBounds().reduced(2), button.getHeight() < 25 ? 9.0f : 11.0f, button.getToggleState() ? amber : ink);
+    label(graphics, button.getButtonText(), button.getLocalBounds().reduced(2), button.getHeight() < 25 ? 9.0f : 11.0f, button.isEnabled() ? (button.getToggleState() ? amber : ink) : dim.withAlpha(0.45f));
 }
 void HardwareLook::drawLinearSlider(juce::Graphics& graphics, int x, int y, int width, int height, float position, float, float, juce::Slider::SliderStyle, juce::Slider&)
 {
@@ -426,6 +426,8 @@ SmallTimerEditor::SmallTimerEditor(SmallTimerProcessor& owner) : AudioProcessorE
         addAndMakeVisible(button);
     loop.onClick = [this] { setMode(0); };
     forever.onClick = [this] { setMode(1); };
+    loop.setRadioGroupId(1);
+    forever.setRadioGroupId(1);
     auto toggle = [this](juce::TextButton& button, juce::String id)
     {
         button.onClick = [this, id] { processor.setValue(id, 1.0f - processor.value(id)); };
@@ -451,12 +453,26 @@ SmallTimerEditor::SmallTimerEditor(SmallTimerProcessor& owner) : AudioProcessorE
     seed.onClick = [this]
     {
         processor.mutate();
+        undoSeed.setEnabled(processor.canUndoMutation());
         seedBurstStarted = juce::Time::getMillisecondCounterHiRes();
         seed.setToggleState(true, juce::dontSendNotification);
         seed.getProperties().set("lampLevel", 1.0);
         repaint();
     };
     addAndMakeVisible(scopeGain);
+    addAndMakeVisible(undoSeed);
+    undoSeed.setTooltip("Undo the last NEW SEED in this mode. Locked or subsequently edited faders stay put. One step per mode; not saved between sessions.");
+    undoSeed.onClick = [this]
+    {
+        if (processor.undoMutation())
+        {
+            seedBurstStarted = 0;
+            seed.setToggleState(false, juce::dontSendNotification);
+            seed.getProperties().set("lampLevel", 0.0);
+        }
+        undoSeed.setEnabled(processor.canUndoMutation());
+        repaint();
+    };
     addAndMakeVisible(scopeFreeze);
     scopeFreeze.setTitle("Freeze waveform display");
     scopeFreeze.setClickingTogglesState(true);
@@ -471,11 +487,11 @@ SmallTimerEditor::SmallTimerEditor(SmallTimerProcessor& owner) : AudioProcessorE
         repaint();
     };
     recall.setTooltip("Recall this mode's snapshot. Shift-click to store. Locked faders stay put.");
-    seed.setTooltip("Mutate unlocked settings in this mode. The knob sets mutation and Wander depth.");
-    motion.setTooltip("Wander: slow, bounded motor motion around the current settings.");
-    soft.setTooltip("Darker, saturated repeats with slow wear in the feedback path.");
-    loop.setTooltip("Tape-style delay with adjustable feedback.");
-    forever.setTooltip("Long, gently decaying repeats. FEED controls how long they linger.");
+    seed.setTooltip("Explore a related Cloud, Fragments or Bloom gesture in this mode. MUTATE sets distance; locks stay put. UNDO SEED restores the previous seed.");
+    motion.setTooltip("Independent switch, available in either mode: slow, bounded Wander around the current settings.");
+    soft.setTooltip("Independent switch, available in either mode: darker, saturated repeats with slow wear in the feedback path.");
+    loop.setTooltip("Mode: choose Loop OR Little Forever. Tape-style delay with adjustable feedback.");
+    forever.setTooltip("Mode: choose Little Forever OR Loop. Long, gently decaying repeats; FEED controls how long they linger.");
     hold.setTooltip("Hold motor motion. Manual fader movement still works.");
     rec.setTooltip("Record up to 30 seconds into temporary RAM. Click again to finish. Audio is never saved.");
     play.setTooltip("Feed the temporary recording through the effects. Click again for live input.");
@@ -606,16 +622,17 @@ void SmallTimerEditor::timerCallback()
     const auto seedLevel = seedBurstStarted > 0 ? juce::jlimit(0.0, 1.0, 1.0 - (now - seedBurstStarted) / 900.0) : 0.0;
     seed.setToggleState(seedLevel > 0, juce::dontSendNotification);
     seed.getProperties().set("lampLevel", seedLevel * seedLevel);
+    undoSeed.setEnabled(processor.canUndoMutation());
     if (!mutate.isMouseButtonDown())
         mutate.setValue(processor.value("mutate"), juce::dontSendNotification);
     repaint();
 }
 void SmallTimerEditor::resized()
 {
-    loop.setBounds(318, 33, 62, 69);
-    forever.setBounds(380, 33, 80, 69);
-    motion.setBounds(460, 33, 66, 69);
-    soft.setBounds(526, 33, 76, 69);
+    loop.setBounds(300, 33, 62, 69);
+    forever.setBounds(362, 33, 80, 69);
+    motion.setBounds(474, 33, 58, 69);
+    soft.setBounds(532, 33, 70, 69);
     for (int index = 0; index < 6; ++index)
     {
         faders[index].setBounds(73 + index * 88, 257, 66, 216);
@@ -623,6 +640,7 @@ void SmallTimerEditor::resized()
     }
     mutate.setBounds(270, 576, 120, 120);
     seed.setBounds(477, 669, 115, 38);
+    undoSeed.setBounds(477, 710, 115, 15);
     scopeGain.setBounds(517, 146, 65, 14);
     scopeFreeze.setBounds(444, 146, 65, 14);
     hold.setBounds(83, 543, 110, 38);
@@ -675,6 +693,11 @@ void SmallTimerEditor::paint(juce::Graphics& graphics)
     graphics.setColour(juce::Colour(0xffdf7e2d));
     graphics.drawText("/", 195, 56, 35, 37, juce::Justification::centredLeft);
     label(graphics, "E X P E R I M E N T A L  L O O P E R  /  T E X T U R E  P R O C E S S O R", { 70, 106, 322, 14 }, 9);
+    graphics.setColour(juce::Colours::black.withAlpha(0.12f));
+    graphics.fillRoundedRectangle(296, 28, 150, 78, 7);
+    graphics.setColour(ink.withAlpha(0.23f));
+    graphics.drawRoundedRectangle(296, 28, 150, 78, 7, 0.7f);
+    label(graphics, "M O D E", { 336, 14, 70, 12 }, 8, ink.withAlpha(0.7f));
     graphics.setGradientFill(juce::ColourGradient(juce::Colour(0xff050706), 66, 143, juce::Colour(0xff101510), 66, 226, false));
     graphics.fillRoundedRectangle(66, 143, 528, 83, 14);
     graphics.setColour(juce::Colours::black);
@@ -723,6 +746,7 @@ void SmallTimerEditor::paint(juce::Graphics& graphics)
     arc.addCentredArc(330, 636, 68, 68, 0, -1.5f, 1.5f, true);
     graphics.strokePath(arc, juce::PathStrokeType(4));
     label(graphics, "VARIATION", { 472, 552, 114, 20 }, 11);
+    label(graphics, processor.mutationName(), { 472, 570, 114, 10 }, 7, amber);
     label(graphics, juce::String(juce::roundToInt(processor.value("mutate") * 100)) + "%", { 472, 581, 114, 24 }, 18, ink);
     const auto amount = juce::jlimit(0.0f, 1.0f, processor.value("mutate"));
     const auto seedProgress = seedBurstStarted > 0 ? static_cast<float>((juce::Time::getMillisecondCounterHiRes() - seedBurstStarted) / 900.0) : 2.0f;
@@ -791,7 +815,7 @@ void SmallTimerEditor::paint(juce::Graphics& graphics)
         graphics.setColour(juce::Colour(0xfffff8da).withAlpha(breath));
         graphics.fillEllipse(481.5f, 643, 2.5f, 2.5f);
     }
-    label(graphics, "SHIFT + RECALL TO STORE / 30 SEC VOLATILE TAPE", { 210, 722, 375, 13 }, 7, dim);
+    label(graphics, "SHIFT + RECALL TO STORE / 30 SEC VOLATILE TAPE", { 225, 733, 365, 10 }, 7, dim);
     for (auto* button : { &loop, &forever, &motion, &soft, &hold, &rec, &play, &recall, &seed })
     {
         if (!button->getToggleState())

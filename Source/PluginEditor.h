@@ -31,6 +31,7 @@ private:
     juce::TextButton hold { "HOLD" }, rec { "REC" }, play { "PLAY" }, recall { "RECALL" };
     juce::Slider mutate;
     juce::TextButton seed { "NEW SEED" };
+    juce::TextButton undoSeed { "UNDO SEED" };
     juce::TextButton scopeGain { "VIEW x2" };
     juce::TextButton scopeFreeze { "FREEZE" };
     smalltimer::WaveformHistory::Snapshot displayedWaveform {};

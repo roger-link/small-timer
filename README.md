@@ -1,4 +1,4 @@
-# Small Timer — sound prototype 0.2.2
+# Small Timer — sound prototype 0.3.1
 
 JUCE 8 / macOS 12+ audio effect, built as Audio Unit, VST3 and standalone.
 The 660 × 750 panel is painted natively: charcoal aluminum, walnut rails,
@@ -48,6 +48,8 @@ builds, without Developer ID signing or notarization.
 ## Play
 
 - LOOP and LITTLE FOREVER each retain six independent fader settings.
+  They form the mutually exclusive MODE group: exactly one is active. WANDER
+  and SOFT FAILURE are separate switches that can be used together in either mode.
 - TIME sets a continuously variable 40 ms–2 second tape-style delay.
 - FEED controls repeats: Loop ranges from a single echo to strong feedback;
   Little Forever uses higher feedback for much longer, gently decaying repeats.
@@ -62,7 +64,24 @@ builds, without Developer ID signing or notarization.
   switching mode remain available. Locks apply to both modes.
 - HOLD freezes motor movement; manual edits remain available. Release to resume.
   Delay and audio playback continue while held; HOLD does not freeze audio.
-- NEW SEED applies a random mutation to unlocked settings in the current mode.
+- NEW SEED explores one of three coordinated gestures, shown under VARIATION:
+  CLOUD opens space and repeats while reducing grain and drift; FRAGMENTS adds
+  grain and drift while tightening time and space; BLOOM grows time, drift and
+  ambience. Small variations make each press different. These are relative
+  changes to your current settings, not preset replacements. The three recipes
+  balance upward/downward travel across the set; steps that overshoot an endpoint
+  reflect inward instead of being clamped there. Near the ends a recipe can
+  therefore reverse a fader's nominal direction. Repeated seeds explore rather
+  than intentionally climbing toward maximum settings.
+- MUTATE controls how far a seed travels. Zero changes nothing; MIX changes are
+  restrained, and FEED changes are gentler in Little Forever. WANDER
+  keeps its existing continuous-motion behaviour.
+- UNDO SEED restores the previous seed's changed faders in the current mode.
+  There is one undo step per mode, not an undo/redo toggle. Current locks and
+  subsequent manual/automation edits are respected. A zero-depth or all-locked
+  no-op does not overwrite a useful undo. Recall or loading saved state clears
+  seed undo; closing and reopening just the editor does not. Undo history and
+  gesture labels are temporary and are not saved with the plugin.
 - RECALL restores that mode's stored snapshot. Shift-click RECALL to store it.
   Initial snapshots use factory settings. Double-click a fader for its mode default.
 - REC captures up to 30 seconds of live audio in RAM. Click again to finish.
